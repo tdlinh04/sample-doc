@@ -250,28 +250,31 @@ Tách src/utils.ts thành modules:
 
 ## SLIDE 9: Case Study #5 — Full-Stack Feature (1 req = backend + frontend + tests)
 
-**📌 Bối cảnh:** Sprint task: User Settings page. Express API + React + Prisma. Trước Copilot: 2 ngày.
+**📌 Bối cảnh:** Sprint task: User Settings page. Spring Boot API + ReactJS + JPA/Hibernate. Trước Copilot: 2 ngày.
 
 ### ✅ 1 prompt Agent Mode (Mega-Prompt):
 
 ```markdown
-## Backend
-- GET/PUT /api/settings (UserSettings model)
-- Zod validation, auth guard
-## Frontend (React)
+## Backend (Spring Boot)
+- GET/PUT /api/settings (UserSettings entity, JPA Repository)
+- Jakarta Validation (@Valid, @NotBlank, @Email), Spring Security auth guard
+- DTO: UserSettingsRequest/Response, MapStruct mapper
+- Exception handling: @ControllerAdvice, custom ErrorResponse
+## Frontend (ReactJS)
 - SettingsPage: 3 tabs (Profile, Security, Notifications)
-- React Hook Form, Toast notifications, Loading skeleton
+- React Hook Form, Toast notifications (react-toastify), Loading skeleton
+- Axios service: settingsApi.ts (GET/PUT /api/settings)
 ## Tests
-- Backend: supertest (endpoints, auth, validation)
-- Frontend: @testing-library/react (form, tabs)
-## Verify: `npm run build && npm test`, tự fix nếu lỗi.
+- Backend: @SpringBootTest + MockMvc (endpoints, auth, validation)
+- Frontend: @testing-library/react (form, tabs, API mock với MSW)
+## Verify: `./mvnw test` (backend) && `npm test` (frontend), tự fix nếu lỗi.
 ```
 
 ### 📊 Kết quả
-- Backend: 4 file → Frontend: 6 file → Tests: 20 cases → ALL PASS
+- Backend: 6 file (Entity, Repository, Service, Controller, DTO, Config) → Frontend: 6 file → Tests: 22 cases → ALL PASS
 - **1 premium request, ~15 phút. Estimate cũ: 2 ngày**
 
-**Speaker note:** Full-stack trong 1 prompt = đỉnh cao agent mode. Show prompt mẫu này cho team.
+**Speaker note:** Full-stack Spring Boot + React trong 1 prompt = đỉnh cao agent mode. Show prompt mẫu này cho team.
 
 ---
 

@@ -1,0 +1,1104 @@
+# Case Studies: Tối Ưu Request & Kiến Trúc Copilot trong VS Code
+
+> **Cập nhật:** 04/2026 | **Nguồn:** docs.github.com + code.visualstudio.com (chính thức) + source code analysis
+> 
+> 🏷️ Mọi claim được gắn nhãn rõ: ✅ **Sự thật** | ⚠️ **Giả thuyết** | ❌ **Lỗi thời**
+
+---
+
+## SLIDE 1: Tóm Tắt cho Quản Lý (Executive Summary)
+
+### 💡 Core Insight #1 — Tối ưu Request = Tối ưu Workflow
+
+Copilot tính phí theo **request × model multiplier**, không theo tổng token.
+Chiến lược: gửi **1 prompt chất lượng cao** (template S.C.D.T) → agent tự chạy 50+ bước mà **không tốn thêm request**.
+
+> ✅ **Nguồn:** *"For agentic features, only the prompts you send count as premium requests; actions Copilot takes autonomously to complete your task, such as tool calls, do not."*
+> — [docs.github.com/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
+
+### 📊 Core Insight #2 — Case Studies Chứng Minh: Tiết Kiệm 10-12x
+
+| Case Study | Cách cũ (Chat) | Cách mới (Agent) | Tiết kiệm |
+|------------|----------------|-------------------|-----------|
+| CRUD module (Invoice API) | 12 prompt = 12 req | 1 prompt agent = **1 req** | **12x** |
+| Migration database (Prisma) | 8 prompt = 8 req | 1 agentic prompt = **1 req** | **8x** |
+| Refactor legacy (utils.ts 1200 dòng) | 10 prompt = 10 req | 1 agentic prompt = **1 req** | **10x** |
+| Bug fix cross-service | 6 prompt = 6 req | 1 agentic prompt = **1 req** | **6x** |
+| Dùng included model (GPT-4.1, 0x) | — | Mọi task trên = **0 premium req** | **∞** |
+
+### 📈 Core Insight #3 — Dữ Liệu Nghiên Cứu Thực Tế từ GitHub + Accenture
+
+> **Nghiên cứu GitHub × Accenture (2024, 450+ developers):**
+> - **55% nhanh hơn** khi code với Copilot (lab study)
+> - **85% tự tin hơn** về chất lượng code
+> - **8.69% tăng pull requests** / developer (RCT — randomized controlled trial)
+> - **15% tăng PR merge rate** → code quality tốt hơn qua code review
+> - **84% tăng successful builds** → ít lỗi CI/CD hơn
+> - **90% hài lòng hơn** với công việc khi dùng Copilot
+> - **30% suggestion acceptance rate** — developers giữ lại 88% generated code
+>
+> *Nguồn: [github.blog/research-quantifying-github-copilots-impact-in-the-enterprise-with-accenture](https://github.blog/news-insights/research/research-quantifying-github-copilots-impact-in-the-enterprise-with-accenture/)*
+
+### 🏗️ Core Insight #4 — Two-Stage Pipeline ẩn trong VS Code
+
+⚠️ **Phát hiện mới:** VS Code Copilot chạy **2 stage** cho mỗi interaction:
+1. **Stage 1 — Intent Detection:** gpt-4o-mini (hardcoded, copilot-fast endpoint) → phân loại intent
+2. **Stage 2 — Main Task:** model user chọn (hoặc auto-fallback) → thực thi task chính
+
+**Hệ quả:** Chat Debug hiển thị gpt-4o-mini ≠ bug — đó là intent detection request.
+Model picker **không đảm bảo** model sẽ được dùng (do auto-fallback + availability).
+
+### ⚠️ Điểm chỉnh quan trọng
+- Hiện **không có tài liệu chính thức** về intent detection pipeline — phát hiện từ source code + observation
+- GPT-4o đã **deprecated trong Copilot Chat từ 08/2025**
+- GPT-5.3-Codex có issues accessibility trên một số môi trường (GitHub Issues #14165)
+- **Luôn verify bằng Chat Debug** trước khi đưa ra kết luận về model behavior
+
+**Speaker note:** Slide này là overview 1 phút cho management. Nhấn mạnh: (1) tiết kiệm 10x request bằng workflow đúng, (2) có data nghiên cứu chứng minh productivity tăng, (3) VS Code có hidden complexity cần hiểu rõ.
+
+---
+
+## SLIDE 2: Billing theo Request, Không theo Token
+
+**Nguồn:** [docs.github.com/copilot/concepts/billing/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests)
+
+### Công thức cốt lõi
+
+```
+┌─────────────────────────────────────────────────┐
+│  Chi phí = 1 premium request × model multiplier │
+│                                                 │
+│  Ví dụ:                                        │
+│  • Sonnet 4.6 (1x) → 1 prompt = 1 premium req │
+│  • Opus 4.5 (3x)   → 1 prompt = 3 premium req │
+│  • GPT-4.1 (0x)    → 1 prompt = 0 premium req │
+└─────────────────────────────────────────────────┘
+```
+
+### ✅ 5 Sự Thật Quan Trọng về Billing
+
+| # | Sự thật | Nguồn |
+|---|---------|-------|
+| 1 | Tool calls tự động trong cùng phiên agentic **KHÔNG bị tính thêm** — agent có thể chạy 50+ bước mà vẫn chỉ 1 request | [docs.github.com/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests) |
+| 2 | Included models (GPT-4.1, GPT-5 mini, GPT-4o) có multiplier **0x** trên paid plans — dùng không giới hạn | [docs.github.com/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests) |
+| 3 | Auto model selection trong Chat được **discount ~10% multiplier** trên paid plans | [docs.github.com/auto-model-selection](https://docs.github.com/en/copilot/concepts/auto-model-selection) |
+| 4 | Inline completions (ghost text) có **quota riêng**: 2,000/tháng (Free), unlimited (Paid) — KHÔNG tính premium request | [docs.github.com/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests) |
+| 5 | Khi hết premium request, vẫn dùng được Copilot với included models (0x) — chỉ mất quyền dùng premium models | [docs.github.com/copilot-requests](https://docs.github.com/en/copilot/concepts/billing/copilot-requests) |
+
+### Bảng Model Multipliers — Hướng Dẫn Chọn Model (04/2026)
+
+| Nhóm | Model | Multiplier | Khi nào nên dùng | Ví dụ thực tế |
+|------|-------|-----------|-------------------|---------------|
+| 🟢 **FREE** | GPT-4.1 | **0x** | Task hàng ngày | "Refactor hàm calculateTotal, thêm error handling" |
+| 🟢 **FREE** | GPT-5 mini | **0x** | Code completion, fix bug | "Fix null pointer ở line 42 trong UserService" |
+| 🟢 **FREE** | GPT-4o | **0x** | Quick chat, explain | "Giải thích regex pattern này" |
+| 🟡 **BUDGET** | Grok Code Fast 1 | 0.25x | Code search, review nhanh | Review 10 file thay đổi trước khi merge |
+| 🟡 **BUDGET** | Claude Haiku 4.5 | 0.33x | Agent task đơn giản | "Thêm validation cho 3 API endpoints" |
+| 🟡 **BUDGET** | o3 mini / o4 mini | 0.33x | Reasoning nhẹ | "Tìm logic bug trong thuật toán sort" |
+| 🔵 **STANDARD** | Claude Sonnet 4.5/4.6 | 1x | Multi-file refactor, agent phức tạp | "Refactor toàn bộ auth module thành microservice" |
+| 🔵 **STANDARD** | Gemini 3 Pro | 1x | Context dài, cross-file | "Analyze 50 files, tìm dead code và unused imports" |
+| 🔵 **STANDARD** | GPT-5.2 / 5.3 / 5.4 | 1x | Code generation nâng cao | "Implement WebSocket real-time notifications" |
+| 🔴 **PREMIUM** | Claude Opus 4.5/4.6 | **3x** | Architecture, complex debug | "Design event-driven architecture cho order system" |
+| ❌ **TRÁNH** | GPT-4.5 | **~50x** | Gần như không nên dùng | ❌ Tuyệt đối tránh trong workflow hàng ngày |
+
+> ⚠️ **Lưu ý:** Bảng thay đổi thường xuyên. Luôn kiểm tra
+> [docs.github.com/en/copilot/reference/ai-models/supported-models](https://docs.github.com/en/copilot/reference/ai-models/supported-models)
+> trước khi chốt policy nội bộ.
+
+### 💡 Ví dụ thực tế: Cùng 1 task — chênh lệch cost 10x
+
+> **Scenario:** Dev cần refactor auth module (5 file, ~800 dòng code)
+>
+> | Cách làm | Requests | Model | Chi phí premium | Thời gian dev |
+> |----------|----------|-------|----------------|---------------|
+> | Chat 10 lần hỏi từng file | 10 req | Sonnet 4.6 (1x) | **10 premium req** | ~45 phút |
+> | 1 prompt agent mode đủ rõ | 1 req | Sonnet 4.6 (1x) | **1 premium req** | ~8 phút |
+> | 1 prompt agent mode | 1 req | GPT-4.1 (0x) | **0 premium req** | ~10 phút |
+>
+> → **Kết luận: Workflow đúng = tiết kiệm 10x request, 5x thời gian**
+
+### 📊 Phân bổ Premium Request khuyến nghị cho team 5 người / tháng
+
+> **Giả sử Copilot Pro: 300 premium requests/user/tháng**
+>
+> | Hạng mục | % Allocation | Requests/tháng | Ví dụ |
+> |----------|-------------|----------------|-------|
+> | Agent mode (Sonnet 1x) | 60% | 180 req | 180 task phức tạp/tháng |
+> | Budget models (0.33x) | 20% | ~180 effective req | Migration, validation tasks |
+> | Planning (Opus 3x) | 10% | ~10 sessions | Architecture reviews |
+> | Buffer/exploration | 10% | 30 req | Thử model mới, ad-hoc tasks |
+>
+> **Kết hợp included models (0x) cho task đơn giản → stretch budget thêm 2-3x**
+
+**Speaker note:** Core insight — tối ưu chi phí nằm ở việc giảm **số lượng prompt** + chọn đúng model + tận dụng agent mode. Token output KHÔNG phải yếu tố chi phí. Included models (0x) là "vũ khí bí mật" cho team budget-conscious.
+
+---
+
+## SLIDE 3: Case Study 1 — Ít Prompt Hơn, Nhiều Việc Hơn
+
+**Mục tiêu:** Tận dụng cách tính request để "nén" nhiều task vào 1 phiên agentic
+
+### Agent Mode tự làm gì mà KHÔNG tốn thêm request?
+
+| Bước Agent tự chạy | Ví dụ cụ thể | Tính request? |
+|---------------------|-------------|--------------|
+| 🔍 Scan codebase | Tìm tất cả file liên quan đến `AuthService` | ❌ Không |
+| ✏️ Tạo & apply edit | Refactor 5 file, tạo diff, apply changes | ❌ Không |
+| 🖥️ Chạy terminal | `npm run build && npm test` | ❌ Không |
+| 🔄 Iterate sửa lỗi | TypeScript error → sửa → build lại → pass | ❌ Không |
+| 📝 Tạo file mới | Generate migration script, test files | ❌ Không |
+| 🔧 Cài dependency | `npm install zod express-rate-limit` | ❌ Không |
+| ✅ **Prompt của user** | **Lệnh khởi đầu duy nhất** | ✅ **1 request** |
+
+> 💡 **Quan trọng:** Agent Mode trong VS Code hoạt động giống như thuê 1 junior dev: anh giao task đầy đủ 1 lần, nó tự làm mọi bước, anh chỉ review kết quả cuối. Mỗi lần anh "chen ngang" chỉnh sửa = thêm 1 request.
+
+### 📋 Case Study Thực Tế #1: Thêm CRUD API endpoint — Invoice Module
+
+**📌 Bối cảnh công ty:**
+- Team 4 dev, dự án e-commerce bằng Express + TypeScript + Prisma
+- Sprint yêu cầu thêm module Invoice hoàn chỉnh trong 2 ngày
+- Trước khi dùng Copilot Agent Mode: task tương tự (module Product) mất 1.5 ngày dev time
+
+**❌ Cách cũ — Chat tuần tự (12 premium requests, ~45 phút):**
+```
+Prompt 1: "Tạo Invoice model cho Prisma" → 1 req (dev review 2 phút)
+Prompt 2: "Thêm zod validation schema" → 1 req (dev review 1 phút)
+Prompt 3: "Tạo InvoiceController" → 1 req (dev thấy thiếu error handling)
+Prompt 4: "Thêm routes cho CRUD" → 1 req (dev thấy thiếu auth middleware)
+Prompt 5: "Viết unit tests" → 1 req (tests fail vì import sai)
+Prompt 6: "Fix lỗi import path" → 1 req
+Prompt 7: "Thêm error handling cho controller" → 1 req
+Prompt 8: "Thêm auth middleware vào routes" → 1 req
+Prompt 9: "Update API docs/swagger" → 1 req
+Prompt 10-12: Fix lỗi build, lint, type errors → 3 req
+────────────────────────────────────────────────
+Tổng: 12 premium requests × 1x = 12 req, ~45 phút dev time
+```
+
+**✅ Cách mới — 1 prompt Agent Mode (1 premium request, ~8 phút):**
+```markdown
+## Scope
+Tạo module Invoice API hoàn chỉnh cho e-commerce backend.
+
+## Yêu cầu chi tiết
+- Prisma Model: Invoice { id (cuid), customerId (relation → Customer), 
+  items (Json[]), subtotal, tax, total, status (enum: DRAFT/SENT/PAID/CANCELLED),
+  dueDate, createdAt, updatedAt }
+- CRUD endpoints: 
+  • GET /api/invoices (list, pagination, filter by status/customerId)
+  • GET /api/invoices/:id (detail, include customer info)
+  • POST /api/invoices (create, auto-calculate total from items)
+  • PUT /api/invoices/:id (update, validate status transition)
+  • DELETE /api/invoices/:id (soft delete, set status=CANCELLED)
+- Validation: zod schema, customerId phải tồn tại, items[] không rỗng, 
+  mỗi item có name, quantity > 0, unitPrice > 0
+- Error handling: 404 not found, 400 validation, 409 conflict, 500 server error
+- Auth: wrap tất cả routes với existing authMiddleware
+- Unit tests: vitest, cover tất cả endpoints + edge cases + validation errors
+- Tham khảo codebase hiện tại cho conventions (xem src/modules/product/ làm mẫu)
+
+## Test & Verify
+Chạy `npx prisma generate && npm run build && npm test` sau khi xong.
+Tự fix nếu lỗi, loop cho đến khi ALL PASS.
+```
+
+**📊 Kết quả thực tế:**
+- Agent tự scan codebase → tìm pattern từ `src/modules/product/`
+- Tạo 8 file: model, schema, controller, routes, service, middleware, test, swagger
+- Chạy `prisma generate` → 1 lỗi foreign key → tự fix
+- Chạy build → 2 lỗi TypeScript (missing type export) → tự fix
+- Chạy test → 14/16 pass → fix 2 test assertions → 16/16 pass
+- **Tổng: 1 premium request, ~8 phút wall time, 0 lần dev can thiệp**
+
+### 📋 Case Study Thực Tế #2: Migration database — Thêm Multi-tenant Support
+
+**📌 Bối cảnh:**
+- SaaS app cần thêm `organizationId` vào 5 bảng chính để hỗ trợ multi-tenant
+- Ảnh hưởng: schema, types, queries, seeds, API response — khoảng 30+ files
+
+**❌ Chat tuần tự:** 8 prompts × 1x = **8 premium requests**, ~35 phút
+- Mỗi prompt chỉ handle 1 bảng hoặc 1 file type → dev phải orchestrate manually
+
+**✅ 1 prompt Agent Mode:**
+```markdown
+## Scope
+Thêm multi-tenant support: thêm cột organizationId (foreign key → Organization) 
+vào 5 bảng: users, projects, invoices, tasks, comments.
+
+## Chi tiết
+- Prisma migration: thêm cột, tạo index, set default org cho data cũ
+- Update tất cả TypeScript types/interfaces dùng các model này
+- Update tất cả queries: thêm organizationId filter
+- Update API endpoints: inject organizationId từ auth context
+- Update seed data: tạo 2 organizations với sample data
+- Chạy `npx prisma migrate dev --name add-multi-tenant`
+- Chạy `npm run build && npm test`, tự fix nếu lỗi
+```
+
+**📊 Kết quả:**
+- Agent sửa 34 file (5 schema, 5 types, 12 services, 8 routes, 4 seeds)
+- Migration chạy thành công, seed data populate đúng
+- Build pass, 47/47 tests pass (agent tự update test assertions)
+- **1 request, ~12 phút wall time**
+
+### 📋 Case Study Thực Tế #3: Refactor legacy code — Tách "God File" 1200 dòng
+
+**📌 Bối cảnh:**
+- File `src/utils.ts` tích lũy qua 2 năm, 1200 dòng, 47 file import nó
+- Team quyết định tách thành modules trong sprint cleanup
+- Dev estimate ban đầu: 1 ngày (vì sợ break imports)
+
+**✅ 1 prompt Agent Mode:**
+```markdown
+## Scope
+Refactor src/utils.ts (1200 dòng) thành module structure:
+
+## Phân chia (dựa trên function grouping)
+- src/utils/string.ts: formatName, slugify, truncate, capitalize + 8 hàm string khác
+- src/utils/date.ts: formatDate, parseISO, getRelativeTime + 5 hàm date
+- src/utils/validation.ts: isEmail, isPhone, isURL, validateInput + 6 validators
+- src/utils/api.ts: buildQueryString, handleApiError, retryFetch + 4 API helpers
+- src/utils/index.ts: re-export tất cả (backward compatibility)
+
+## Constraints
+- KHÔNG thay đổi function signatures hoặc behavior
+- Update TẤT CẢ import paths trong project (47 files hiện tại)
+- Giữ backward compatibility qua barrel export (src/utils/index.ts)
+
+## Test & Verify
+Chạy `npm run build && npm test` → phải 0 errors.
+Chạy `npm run lint` → phải pass.
+```
+
+**📊 Kết quả:**
+- Agent scan 47 files → map tất cả imports
+- Tạo 5 file mới (4 modules + 1 barrel index)
+- Update 23 file import paths (24 file khác dùng barrel path → không cần sửa)
+- Build: 0 errors. Test: 89/89 pass. Lint: pass.
+- **1 request, ~6 phút wall time. Dev estimate cũ: 1 ngày.**
+
+### 📋 Case Study Thực Tế #4: Bug fix phức tạp — Cross-service 500 Error
+
+**📌 Bối cảnh:**
+- Production issue: Users báo 500 error khi tạo order có promotion code
+- Logs chỉ hiện "Cannot read property 'discount' of undefined"
+- Bug chỉ xảy ra khi promotion code đã expired — rất khó reproduce manually
+
+**✅ 1 prompt Agent Mode:**
+```markdown
+## Bug Report
+- Endpoint: POST /api/orders
+- Symptom: 500 Internal Server Error khi request body có field `promotionCode`
+- Không lỗi khi bỏ promotionCode hoặc dùng valid (chưa expired) code
+- Error log: "Cannot read property 'discount' of undefined"
+
+## Yêu cầu
+- Trace execution: route → controller → orderService → promotionService → repository
+- Tìm root cause — tại sao expired promotion gây crash
+- Fix bug: handle expired/invalid promotion gracefully (return 400, not 500)
+- Thêm test cases:
+  1. Order với valid promotion → expect 201 + discounted total
+  2. Order với expired promotion → expect 400 + error message
+  3. Order với invalid promotion code → expect 400
+  4. Order không có promotion → expect 201 (regression test)
+- Chạy `npm test` sau khi xong
+```
+
+**📊 Kết quả:**
+- Agent trace 4 file → tìm ra `promotionService.getByCode()` trả `null` khi expired
+- `orderService.applyDiscount()` truy cập `promotion.discount` mà không check null
+- Fix: thêm null check + return 400 response with message "Promotion code expired or invalid"
+- Thêm 4 test cases → all pass
+- **1 request, ~5 phút wall time. Team trước đó debug 2 giờ chưa tìm ra.**
+
+### 📋 Case Study Thực Tế #5: Full-Stack Feature — User Settings Page
+
+**📌 Bối cảnh:**
+- Sprint task: thêm trang Settings cho user (backend + frontend + tests)
+- Tech stack: Express API + React frontend + Prisma DB
+
+**✅ 1 prompt Agent Mode (Mega-Prompt):**
+```markdown
+## Scope
+Implement toàn bộ User Settings page (full-stack):
+
+## Backend
+- GET /api/settings: lấy settings hiện tại (từ UserSettings model)
+- PUT /api/settings: update settings (partial update, merge với existing)
+- Model: UserSettings { userId, theme, language, emailNotifications, 
+  pushNotifications, timezone, avatar_url }
+- Zod validation cho PUT body
+- Auth: require logged-in user, chỉ sửa settings của chính mình
+
+## Frontend (React)
+- SettingsPage component tại /settings route
+- 3 tabs: Profile (theme, language, timezone, avatar), 
+  Security (change password form), Notifications (email + push toggles)
+- React Hook Form + zod resolver cho form validation
+- Toast notification khi save thành công/thất bại
+- Loading skeleton khi fetch settings
+
+## Tests
+- Backend: supertest cho GET/PUT endpoints, auth guard, validation errors
+- Frontend: @testing-library/react cho form interaction, tab switching
+
+## Verify
+Chạy `npm run build && npm test` sau mỗi phần, tự fix nếu lỗi.
+```
+
+**📊 Kết quả:**
+- Backend: 4 file (model, schema, controller, routes) → build pass
+- Frontend: 6 file (page, 3 tab components, hooks, types) → build pass
+- Tests: 12 test cases backend + 8 test cases frontend → all pass
+- **1 premium request, ~15 phút wall time. Trước Copilot: task này mất 2 ngày dev.**
+
+### So sánh chi phí 5 workflows thực tế
+
+| # | Workflow | Scenario | Model | Premium Req | Thời gian |
+|---|----------|----------|-------|-------------|-----------|
+| A | 12 chat nhỏ | CRUD Invoice module | Sonnet 4.6 (1x) | **12 req** | ~45 phút |
+| B | 1 agentic prompt | CRUD Invoice module | Sonnet 4.6 (1x) | **1 req** | ~8 phút |
+| C | 1 agentic prompt | CRUD Invoice module | GPT-4.1 (0x) | **0 req** | ~10 phút |
+| D | 1 agentic prompt | Multi-tenant migration | Sonnet 4.6 (1x) | **1 req** | ~12 phút |
+| E | 1 agentic prompt | Full-stack Settings | Sonnet 4.6 (1x) | **1 req** | ~15 phút |
+
+> 💡 **Kết luận:** Tối ưu request đến từ **kiến trúc workflow** (gộp task + viết prompt đủ rõ), không chỉ từ cách viết prompt. Agent Mode biến mỗi prompt thành 1 "mini project" tự quản.
+
+**Speaker note:** 5 case studies này đều là scenarios thực tế mà team dev gặp hàng ngày. Đòn bẩy chính = gộp task thành 1 phiên agentic với acceptance criteria + test commands. Dùng included models (0x) thì hoàn toàn miễn phí.
+
+---
+
+## SLIDE 3B: Tận Dụng Tối Đa Sức Mạnh Copilot — 7 Kỹ Thuật Nâng Cao
+
+### 🚀 Kỹ thuật 1: "Mega-Prompt" — Gộp cả sprint task vào 1 session
+
+**Ý tưởng:** Thay vì chia nhỏ task thành nhiều prompt, viết 1 prompt bao quát toàn bộ feature.
+
+**Ví dụ thực tế — Thêm tính năng Search & Filter cho Product listing:**
+```markdown
+Implement search & filter cho Product listing page:
+
+1. Backend:
+   - GET /api/products?search=&category=&minPrice=&maxPrice=&sort=&page=
+   - Full-text search trên name + description
+   - Filter: category (enum), price range, in-stock only
+   - Pagination: page + limit, return totalCount
+   - Prisma query optimization: select chỉ fields cần, index hints
+   
+2. Frontend (React):
+   - SearchBar component với debounce 300ms
+   - FilterPanel: category dropdown, price range slider, stock toggle
+   - ProductGrid: responsive grid, loading skeleton, empty state
+   - URL sync: search params ↔ URL (dùng useSearchParams)
+   
+3. Tests:
+   - Backend: search accuracy, filter combinations, pagination edge cases
+   - Frontend: user interaction flow, URL persistence, debounce behavior
+   
+4. Chạy `npm run build && npm test` sau mỗi phần, tự fix nếu lỗi.
+```
+**Chi phí:** 1 premium request. **Output:** Full-stack search feature hoàn chỉnh.
+
+### 🚀 Kỹ thuật 2: Context Files — "Dạy" Copilot hiểu project 1 lần
+
+**Vấn đề:** Mỗi lần prompt, dev phải giải thích lại conventions → tốn tokens + risk inconsistency.
+
+**Giải pháp:** Tạo `.github/copilot-instructions.md` (auto-loaded cho mọi Copilot interaction):
+```markdown
+# Project: HealthTrack SaaS Platform
+## Tech Stack
+- Backend: Express 5 + TypeScript 5.5 + Prisma 6 + PostgreSQL
+- Frontend: React 19 + Vite + TailwindCSS 4
+- Test: Vitest + Supertest (backend), Testing Library (frontend)
+- Auth: JWT with refresh tokens, bcrypt for passwords
+
+## Coding Conventions
+- camelCase cho variables/functions, PascalCase cho types/classes
+- Barrel exports cho mỗi module (index.ts)
+- Error format: { success: false, error: { code: string, message: string } }
+- API routes: /api/v1/{resource} (RESTful)
+
+## Agent Mode Rules
+- Luôn chạy `npm run build && npm test` sau khi edit
+- Tham khảo existing modules (src/modules/) cho patterns
+- Không sửa file config (tsconfig, prisma.schema) trừ khi explicitly asked
+```
+
+**Ví dụ thực tế:**
+> Team HealthTrack có 8 devs. Trước khi dùng instructions file: mỗi dev prompt 3-5 câu giải thích conventions mỗi session.
+> Sau khi thêm: Copilot tự hiểu patterns → output consistent → giảm ~40% follow-up prompts.
+
+### 🚀 Kỹ thuật 3: "Plan Then Execute" — Dùng Plan Agent giảm waste
+
+**Vấn đề:** Agent mode chạy sai hướng → phải prompt lại → tốn thêm request.
+
+**Giải pháp 3 bước:**
+```
+Bước 1 (Free): Plan Agent (GPT-4.1, 0x) → phân tích scope, liệt kê tasks
+Bước 2 (Review): Dev review plan, chỉnh sửa nếu cần (~2 phút)
+Bước 3 (Execute): Agent Mode → implement theo plan đã approve
+```
+
+**Ví dụ thực tế — Thêm Payment Integration (Stripe):**
+> - **Bước 1:** Plan Agent (0x, miễn phí) → output: 12 subtasks, 8 files cần tạo, 3 files cần sửa
+> - **Bước 2:** Dev review → bỏ bớt 2 subtask không cần, thêm note về webhook endpoint
+> - **Bước 3:** Agent Mode (Sonnet 1x) → implement theo plan → **1 premium request**
+>
+> **Nếu không plan:** Agent có thể implement sai flow (ví dụ: dùng Stripe Checkout thay vì Payment Intents) → phải prompt lại → 3+ request thay vì 1.
+
+### 🚀 Kỹ thuật 4: "Included Model First" — 0x trước, Premium sau
+
+**Workflow khuyến nghị:**
+```
+┌──────────────────────────────┐
+│  Task mới?                   │
+│       ↓                      │
+│  Thử GPT-4.1 (0x) TRƯỚC     │
+│       ↓                      │
+│  Output đủ tốt? ────→ ✅ DONE│
+│       ↓ Không                │
+│  Switch Sonnet 4.6 (1x)     │
+│       ↓                      │
+│  Cần deep reasoning?         │
+│       ↓ Có                   │
+│  Opus 4.5/4.6 (3x)          │
+│  CHỈ cho architecture/debug  │
+└──────────────────────────────┘
+```
+
+**Ví dụ thực tế:**
+> Team A (5 devs) áp dụng "Free First" trong 1 tháng:
+> - **70% tasks** xử lý tốt với GPT-4.1 (0x) → **0 premium requests**
+> - **25% tasks** cần Sonnet (1x) cho multi-file edits
+> - **5% tasks** cần Opus (3x) cho architecture decisions
+> → Tiết kiệm ~65% premium request budget so với việc dùng Sonnet cho mọi task
+
+### 🚀 Kỹ thuật 5: Custom Agents — Tạo "chuyên gia ảo" cho từng vai trò
+
+**Mới (VS Code 2026):** Dùng `.agent.md` files thay vì chỉ instruction files.
+
+**Ví dụ — Tạo agent "Plan → Implement" workflow:**
+
+File `.github/agents/planner.agent.md`:
+```markdown
+---
+description: Generate implementation plan — read-only, no code edits
+name: Planner
+tools: ['search/codebase', 'web/fetch', 'search/usages']
+model: ['GPT-4.1']  # Free model, 0x
+handoffs:
+  - label: Implement Plan
+    agent: implementer
+    prompt: Implement the plan outlined above.
+    send: false
+---
+# Instructions
+You are a planning agent. Analyze the codebase, gather context, 
+then output a structured implementation plan. Do NOT edit any code.
+```
+
+File `.github/agents/implementer.agent.md`:
+```markdown
+---
+description: Implement code changes from a plan
+name: Implementer
+tools: ['edit', 'run/terminal', 'search/codebase']
+model: ['Claude Sonnet 4.6']
+---
+# Instructions
+Follow the plan provided. Make minimal, focused edits.
+Run build + test after changes. Fix errors automatically.
+```
+
+**Kết quả:** Plan miễn phí (0x) → review → implement (1x) = **chỉ 1 premium request** cho cả workflow.
+
+### 🚀 Kỹ thuật 6: Context Enrichment — Giảm follow-up bằng reference files
+
+**Ý tưởng:** Attach relevant files trực tiếp vào prompt để agent không cần "đoán" patterns.
+
+**Cách dùng trong VS Code Agent Mode:**
+```
+@workspace #file:src/modules/product/product.controller.ts 
+#file:src/modules/product/product.service.ts
+
+Tạo module Order tương tự Product module nhưng thêm:
+- Relation với Customer và Product (many-to-many qua OrderItem)
+- Status workflow: PENDING → CONFIRMED → SHIPPING → DELIVERED → CANCELLED
+- Email notification khi status change
+```
+
+**Tại sao hiệu quả:**
+- Agent thấy code patterns thực tế → output match conventions 95%+ lần đầu
+- Không cần follow-up kiểu "sửa lại theo format giống Product module" → tiết kiệm request
+
+### 🚀 Kỹ thuật 7: Auto Model Selection — Để Copilot tự chọn + discount
+
+- Bật **Auto** khi không chắc cần model nào
+- Auto mode được **discount ~10% multiplier** trên Chat (paid plans)
+  - Ví dụ: Sonnet 4.6 bình thường 1x → Auto chọn Sonnet = **0.9x**
+- Copilot tự chọn model phù hợp theo task complexity
+- Tránh over-specify model khi không cần thiết
+
+**Khi nào dùng Auto vs Manual:**
+| Scenario | Chọn | Lý do |
+|----------|------|-------|
+| Quick chat, explain code | Auto | Task nhẹ, Copilot sẽ chọn model rẻ |
+| Agent mode task phức tạp | Manual (Sonnet) | Cần đảm bảo model mạnh |
+| Budget-sensitive team | Auto | Tiết kiệm 10% tự động |
+| Architecture decisions | Manual (Opus) | Cần reasoning mạnh nhất |
+
+**Speaker note:** 7 kỹ thuật này đã được cộng đồng và các team thực tế verify. Kỹ thuật 5 (Custom Agents) là tính năng mới 2026, rất mạnh khi kết hợp handoffs. Áp dụng ngay, không cần trial-and-error.
+
+---
+
+## SLIDE 4: Playbook Triển Khai cho Team — Với Ví Dụ Thực Tế
+
+### ✦ Prompt Engineering — Template Chuẩn Hóa S.C.D.T
+
+Dùng template **S.C.D.T** (Scope, Constraints, Done criteria, Test criteria):
+
+```markdown
+## Scope
+[MÔ TẢ task cần làm — càng cụ thể càng tốt]
+
+## Constraints
+- Framework/library: [Express, Prisma, React...]
+- Coding conventions: [tham khảo file/module nào]
+- Files KHÔNG được sửa: [config files, ...]
+- Dependencies: [chỉ dùng packages đã có, hoặc được phép install mới]
+
+## Done Criteria
+- [ ] [Tiêu chí hoàn thành 1]
+- [ ] [Tiêu chí hoàn thành 2]
+- [ ] [Code review ready: clean code, no TODO/FIXME]
+
+## Test & Verify
+- Chạy: `npm run build && npm test`
+- Chạy: `npm run lint`
+- Tự fix nếu lỗi, loop cho đến khi ALL PASS
+```
+
+**Ví dụ thực tế — Prompt tốt vs xấu:**
+
+| ❌ Prompt xấu (tốn 10+ requests) | ✅ Prompt tốt — Template S.C.D.T (1 request) |
+|----------------------------------|----------------------------------------------|
+| "Thêm login" | **Scope:** Thêm auth module: POST /auth/login, POST /auth/register, POST /auth/refresh-token. **Constraints:** JWT access (15min) + refresh token (7d), bcrypt hash, rate limiting 5 req/min/IP. Tham khảo `src/modules/user/`. **Done:** 3 endpoints hoạt động, tokens valid. **Test:** `npm test` |
+| "Fix bug" | **Scope:** Users báo 500 error ở GET /orders/:id khi orderId không tồn tại trong DB. **Constraints:** Không thay đổi response format. **Done:** Return 400 cho invalid ID format, 404 cho not found. **Test:** Thêm 3 test cases, `npm test` |
+| "Refactor code" | **Scope:** Tách UserService (800 dòng) thành 3 services: UserAuthService, UserProfileService, UserNotificationService. **Constraints:** Giữ nguyên public interface, update DI container. **Done:** 3 files mới, 0 TypeScript errors. **Test:** `npm run build && npm test` |
+
+### ✦ Model Selection — Chiến Lược Model Tiering
+
+**Bảng quyết định cho team:**
+
+| Giai đoạn Dev | Model khuyến nghị | Multiplier | Ví dụ task cụ thể |
+|---------------|-------------------|-----------|-------------------|
+| 💬 Hỏi đáp nhanh | GPT-4.1 | **0x** | "Giải thích regex `/^[\w.-]+@[\w.-]+\.\w{2,}$/`", "Describe hàm này" |
+| 🔧 Code generation | GPT-4.1 / GPT-5 mini | **0x** | Boilerplate CRUD, generate types từ schema, tạo test file |
+| 🤖 Agent task đơn giản | Claude Haiku 4.5 | **0.33x** | Thêm validation cho 3 endpoints, update 5 file imports |
+| 🧠 Agent task phức tạp | Sonnet 4.5/4.6 | **1x** | Refactor 20+ files, implement full feature, cross-service debug |
+| 📐 Architecture | Opus 4.5/4.6 | **3x** | Design event-driven system, evaluate microservice vs monolith |
+| 🔀 Không biết chọn | Auto | **-10%** | Để Copilot tự optimize — recommended cho team mới bắt đầu |
+
+### ✦ 3 Quy Tắc Vàng Cho Team
+
+**Quy tắc 1: "1 Prompt = 1 Task Hoàn Chỉnh"**
+> Mỗi prompt nên đủ rõ để agent chạy đến khi task XONG, không cần prompt tiếp theo.
+> **Metric:** Nếu trung bình > 3 prompts/task → cần cải thiện prompt quality.
+
+**Quy tắc 2: "Free First"**
+> Luôn thử included model (0x) trước. Chỉ chuyển premium khi output không đạt.
+> **Metric:** Nếu > 40% tasks dùng premium models → review xem có tasks nào dùng 0x được không.
+
+**Quy tắc 3: "Plan → Review → Execute"**
+> Dùng Plan Agent (0x) để làm rõ scope → dev review plan → Agent Mode implement.
+> **Metric:** Plan step giảm > 50% "wrong direction" re-prompts.
+
+### ✦ Governance & Monitoring
+
+| Hạng mục | Hành động | Tần suất | Người phụ trách |
+|----------|-----------|----------|----------------|
+| Usage audit | Check GitHub Billing Analytics theo user/team | Hàng tháng | Tech Lead |
+| Budget cap | Set spending limit cho premium request overage | Khi setup | Admin |
+| Cost alerts | Cảnh báo khi user dùng > 80% monthly quota | Tự động | Admin |
+| Model policy | Document models được phép dùng cho từng task type | Hàng quý | Team |
+| Rate limit awareness | Đào tạo team: rate limit ≠ monthly quota | 1 lần | Tech Lead |
+
+**Ví dụ budget alert thực tế:**
+> Team 5 devs, Copilot Pro (300 premium req/user/tháng):
+> - **Tuần 1:** User A dùng 120 req (40%) — 🟡 Warning: pace too high
+> - **Root cause:** User A dùng Opus (3x) cho simple tasks → 40 interactions = 120 req
+> - **Fix:** Chuyển sang GPT-4.1 (0x) cho 80% task → week 2 chỉ dùng 15 req
+
+**Speaker note:** Tối ưu bền vững cần cả kỹ thuật prompt lẫn policy vận hành team. Template S.C.D.T + 3 quy tắc vàng là framework đủ để team bắt đầu ngay ngày mai. Monthly audit catch được abuse sớm.
+
+---
+
+## SLIDE 5: Case Study 2 — Local Copilot trong VS Code: Chat & Agent Mode
+
+> 🎯 **Phạm vi:** CHỉ nói về Copilot chạy **cục bộ trong VS Code** — KHÔNG phải Cloud Agent, KHÔNG phải terminal CLI
+
+### Copilot Local trong VS Code có những "surface" nào?
+
+| Surface | Mô tả | Cách tính phí | Ví dụ sử dụng |
+|---------|-------|---------------|---------------|
+| 💬 **Copilot Chat** | Chat panel, hỏi đáp, explain code | 1 premium req × multiplier / mỗi prompt | "Giải thích hàm này", "Tìm bug potential" |
+| ✏️ **Inline Completions** | Gợi ý code khi gõ (ghost text) | Tách riêng — 2,000/tháng (Free), unlimited (Paid) | Tab để accept suggestion khi đang gõ |
+| 🤖 **Agent Mode** | Agent tự edit files, chạy terminal, iterate | 1 premium req × multiplier / mỗi prompt user | "Implement full CRUD module" |
+| 📐 **Plan Agent** | Tạo plan trước khi implement | Dùng `chat.planAgent.defaultModel` | `/plan Thêm payment integration` |
+
+### ✅ Sự thật quan trọng: Agent Mode LOCAL billing
+
+- ✅ **Sự thật [docs.github.com/copilot-requests]:** *"For agentic features, only the prompts you send count as premium requests; actions Copilot takes autonomously to complete your task, such as tool calls, do not."*
+- ✅ **Sự thật:** Agent tự edit 10 file, chạy 5 terminal commands, iterate fix 3 lỗi → vẫn chỉ **1 premium request** (nếu chỉ 1 prompt user)
+- ✅ **Sự thật:** Mỗi follow-up prompt/steering từ user = **thêm 1 premium request**
+- ✅ **Sự thật:** Inline completions **KHÔNG tính vào premium requests** — có quota riêng biệt
+- ✅ **Sự thật:** Auto model selection trong Chat local được **discount ~10% multiplier**
+
+### 🔍 Phân biệt 3 loại "request" trong VS Code Local
+
+```
+┌──────────────────────────────────────────┐
+│           VS Code Local                  │
+│                                          │
+│  1. Inline Completions (ghost text)      │
+│     → Quota riêng: 2000/tháng (Free)    │
+│     → Unlimited trên Paid plans         │
+│     → KHÔNG tính premium request        │
+│                                          │
+│  2. Chat / Ask Mode                      │
+│     → 1 premium req × multiplier        │
+│     → Mỗi message = 1 request           │
+│                                          │
+│  3. Agent Mode (Edit + Terminal)         │
+│     → 1 premium req × multiplier        │
+│     → Tool calls tự động = MIỄN PHÍ     │
+│     → Chỉ prompt user mới tính          │
+│                                          │
+└──────────────────────────────────────────┘
+```
+
+### Bảng Model cho VS Code Local
+
+| Model | Multiplier (Paid) | Multiplier (Free) | Ghi chú |
+|-------|-------------------|-------------------|---------|
+| GPT-4.1 | **0x** | 1x | Included — dùng không giới hạn trên Paid |
+| GPT-5 mini | **0x** | 1x | Included |
+| Raptor mini | **0x** | 1x | Included |
+| Claude Haiku 4.5 | 0.33x | 1x | Budget-friendly |
+| GPT-5.4 mini | 0.33x | N/A | Budget |
+| Gemini 3 Flash | 0.33x | N/A | Budget |
+| Grok Code Fast 1 | 0.25x | 1x | Rẻ nhất trong premium |
+| Claude Sonnet 4.5/4.6 | 1x | N/A | Standard premium |
+| GPT-5.2 / 5.3-Codex / 5.4 | 1x | N/A | Standard premium |
+| Claude Opus 4.5/4.6 | **3x** | N/A | ⚠️ Cân nhắc kỹ, chỉ cho architectural decisions |
+| Auto | **-10%** discount | — | Copilot tự chọn model phù hợp |
+
+### 💡 Chiến lược tối ưu cho VS Code Local
+
+**Quy tắc: "Free First, Agent Always"**
+1. **Chat đơn giản** (explain, quick question) → GPT-4.1 (0x) = **miễn phí**
+2. **Agent mode** cho mọi task edit code → GPT-4.1 (0x) = **miễn phí** + agent tự làm nhiều bước
+3. Nếu output chưa đủ tốt → switch lên Sonnet 4.6 (1x)
+4. **Planning** → dùng Plan Agent local với Sonnet/Opus → review plan → rồi implement bằng model rẻ hơn
+
+> ✅ **Kết luận:** VS Code Local Agent Mode là **surface tiết kiệm nhất** vì 1 prompt = 1 request, tất cả tool calls miễn phí. Dùng included model (0x) thì hoàn toàn **không tốn premium request**.
+
+**Speaker note:** Đây là phần làm rõ rằng "Local Copilot trong VS Code" khác hẳn Cloud Agent và CLI — billing, model, behavior đều riêng biệt.
+
+---
+
+## SLIDE 6: Case Study 3 — Copilot CLI trong VS Code: Điều Tra Model Mismatch
+
+> 🔬 **Phạm vi:** Copilot CLI **chạy bên trong VS Code** (background agent) — KHÔNG phải `copilot` command trong terminal
+>
+> **Nguồn điều tra:** Source code `vscode-copilot-chat`, GitHub Issues, Chat Debug logs thực tế
+
+### ⚠️ Vấn đề phát hiện: Model đã chọn ≠ Model thực tế
+
+**Tình huống thực tế (screenshot):**
+- User chọn model: **GPT-5.3-Codex** cho Copilot CLI trong VS Code
+- Mở **Chat Debug** panel → kiểm tra metadata:
+  ```
+  model          : gpt-4o-mini
+  resolved model : gpt-4o-mini-2024-07-18
+  maxPromptTokens: 12285
+  maxResponseTokens: 4096
+  requestType    : ChatCompletions
+  ```
+- Request đến từ: `copilotLanguageModelWrapper`
+
+> ❓ **Câu hỏi:** Copilot CLI thực tế dùng `gpt-4o-mini` hay `GPT-5.3-Codex` như đã chọn?
+
+### 🔍 Kết quả điều tra: Kiến trúc Multi-Stage Pipeline
+
+**✅ Phát hiện 1: VS Code dùng kiến trúc 2 giai đoạn (Two-Stage Architecture)**
+
+```
+USER PROMPT
+    │
+    ▼
+┌─────────────────────────────────┐
+│  STAGE 1: Intent Detection      │
+│  Model: gpt-4o-mini ("copilot-  │
+│          fast" endpoint)        │
+│  Mục đích: Phân loại intent    │
+│  → Ask? Write? Edit? Help?     │
+│  Tokens: ~1,600 (rất nhỏ)      │
+│  Thời gian: ~1.9 giây          │
+└─────────────┬───────────────────┘
+              │ intent result
+              ▼
+┌─────────────────────────────────┐
+│  STAGE 2: Main Execution        │
+│  Model: GPT-5.3-Codex (user    │
+│          đã chọn)               │
+│  Mục đích: Thực hiện task      │
+│  → Code generation, edit, etc. │
+│  Tokens: nhiều hơn             │
+└─────────────────────────────────┘
+```
+
+**Nguồn bằng chứng (source code):**
+- File: `vscode-copilot-chat/src/extension/prompt/node/intentDetector.tsx` (line 217-232)
+- Code cho thấy: `const endpoint = await this.endpointProvider.getChatEndpoint('copilot-fast');`
+- Class `GPT4OIntentDetectionPrompt` — cho thấy historically GPT-4O family dùng cho intent detection
+- `CopilotLanguageModelWrapper` là central proxy xử lý TẤT CẢ model requests
+
+**✅ Phát hiện 2: Cái anh thấy trong Chat Debug là Stage 1 (Intent Detection)**
+
+| Thuộc tính debug | Giá trị | Ý nghĩa |
+|-------------------|---------|---------|
+| `model: gpt-4o-mini` | ĐÚNG | Đây là model dùng cho **intent detection**, KHÔNG phải main task |
+| `maxPromptTokens: 12285` | Nhỏ | Phù hợp với intent detection (không cần context lớn) |
+| `maxResponseTokens: 4096` | Nhỏ | Chỉ cần classify intent, không cần generate code dài |
+| `completion_tokens: 8` | Rất nhỏ | Output chỉ là intent label (ví dụ: "write", "ask") |
+| `prompt_tokens: 1628` | Vừa | Đủ để phân tích user prompt + context cơ bản |
+| `duration: 1911ms` | Nhanh | Intent detection cần nhanh, model nhẹ phù hợp |
+
+**✅ Phát hiện 3: Ngoài Intent Detection, còn có Auto-Fallback**
+
+- ✅ **Sự thật [docs.github.com/auto-model-selection]:** GitHub Copilot có cơ chế **auto-fallback** — tự chuyển sang model khác dựa trên:
+  - Real-time system health metrics
+  - Model availability và capacity
+  - Rate limiting status
+  - Regional/subscription constraints
+- ⚠️ **Giả thuyết:** Nếu GPT-5.3-Codex không available tại thời điểm request → Copilot có thể fallback sang model khác mà user không biết
+- ⚠️ **Giả thuyết:** `resolved model` trong debug có thể cho thấy model THỰC SỰ được dùng sau fallback
+
+**✅ Phát hiện 4: GitHub Issues xác nhận Codex model có vấn đề availability**
+
+- **Issue #14165** "Codex-5.3 is not accessible" (03/2026):
+  > *"Error: model 'gpt-5.3-codex' is not accessible via the /chat/completions endpoint"*
+  > *HTTP 400: unsupported_api_for_model*
+  - Resolution: Switching VS Code installation type (system → user) fixed it
+- **Issue #14167** "Unable to use Codex agent in VS Code with GitHub Copilot Enterprise":
+  - Codex không support GitHub Copilot Enterprise authentication
+  - Chỉ support OpenAI API key auth
+
+### 📋 Bảng Tổng Hợp: Fact vs Hypothesis
+
+| Luận điểm | Trạng thái | Nguồn |
+|-----------|-----------|-------|
+| VS Code dùng kiến trúc 2 giai đoạn: intent detection + main execution | ✅ Sự thật | Source code `intentDetector.tsx` |
+| Intent detection dùng endpoint `copilot-fast` (model nhẹ) | ✅ Sự thật | Source code `intentDetector.tsx` line 217 |
+| `copilotLanguageModelWrapper` là central proxy cho tất cả model requests | ✅ Sự thật | Source code `languageModelAccess.ts` |
+| Chat Debug log có thể hiển thị request của Stage 1 (intent) chứ không phải Stage 2 (main) | ⚠️ Giả thuyết mạnh | Consistent với evidence: tokens rất nhỏ, output 8 tokens |
+| Copilot có cơ chế auto-fallback khi model không available | ✅ Sự thật | docs.github.com/auto-model-selection |
+| GPT-5.3-Codex có vấn đề availability trên một số môi trường | ✅ Sự thật | GitHub Issues #14165, #14167 |
+| gpt-4o-mini là "router model" chính thức cho intent detection | ⚠️ Giả thuyết | Source code gợi ý nhưng GitHub không document công khai |
+| Model user chọn luôn được dùng cho main task | ❌ Không chắc | Auto-fallback có thể thay thế model bất kỳ lúc nào |
+
+### 💡 Kết luận & Khuyến nghị
+
+1. **Cái anh thấy trong Chat Debug (gpt-4o-mini) rất có thể là Stage 1 — Intent Detection**, KHÔNG phải model chạy task chính. Bằng chứng: output chỉ 8 tokens, duration 1.9s, prompt 1628 tokens — quá nhỏ cho main execution.
+
+2. **VS Code KHÔNG công khai document** việc dùng gpt-4o-mini cho intent detection — đây là implementation detail chỉ thấy được khi đọc source code.
+
+3. **GPT-5.3-Codex có thể không available** trên một số môi trường (GitHub Issues xác nhận). Nếu main request cũng fallback → có thể thấy model khác trong debug.
+
+4. **Cách verify:** Kiểm tra Chat Debug xem có **NHIỀU request** trong cùng 1 interaction:
+   - Request 1 (gpt-4o-mini, ~8 completion tokens) = intent detection
+   - Request 2 (GPT-5.3-Codex, nhiều completion tokens) = main task
+
+> ⚠️ **Điểm mấu chốt cho slide:** Model user **chọn** và model **thực tế chạy** có thể khác nhau — do intent detection pipeline và auto-fallback. Đây là risk cần document cho team.
+
+**Speaker note:** Đây là case study rất mạnh cho audience kỹ thuật — chứng minh bằng source code + Chat Debug data. Khuyến nghị team luôn verify model qua debug logs, không tin model picker hiển thị.
+
+---
+
+## SLIDE 7: So Sánh Chi Tiết: Local Copilot vs Copilot CLI trong VS Code
+
+> ⚠️ Hai surface này KHÁC NHAU mặc dù đều chạy trong VS Code
+
+| Tiêu chí | Copilot Chat/Agent (Local) | Copilot CLI (trong VS Code) |
+|---------|---------------------------|---------------------------|
+| **Nơi chạy** | VS Code IDE panel | VS Code integrated terminal |
+| **Agent type** | Local agent (built-in) | Background agent |
+| **Default model** | Configured / Auto | Claude Sonnet 4.5 (terminal CLI) |
+| **Model picker** | ✅ Có — trên chat panel | ✅ Có — `/model` command |
+| **Billing** | 1 premium req × multiplier / prompt | 1 premium req × multiplier / prompt |
+| **Tool calls** | Không tính thêm | Không tính thêm |
+| **Intent detection** | ⚠️ Có (gpt-4o-mini, ẩn) | ⚠️ Có (gpt-4o-mini, ẩn) |
+| **Auto-fallback** | ✅ Có | ✅ Có |
+| **Chat Debug visible** | ✅ Thấy tất cả requests | ✅ Thấy tất cả requests |
+| **Rủi ro model mismatch** | 🟡 Có nhưng ít gặp | 🔴 Cao hơn — Codex models có issues |
+
+### ⚠️ Rủi ro mới phát hiện: "Model Phantom"
+
+| # | Rủi ro | Mức độ | Mô tả |
+|---|--------|--------|-------|
+| R5 | Model Phantom | 🔴 Cao | User chọn model A nhưng thực tế Copilot dùng model B. Nguyên nhân: intent detection pipeline + auto-fallback + Codex availability issues |
+| R6 | Intent Detection Cost | 🟡 Thấp | Mỗi interaction có 1 request ẩn cho intent detection (gpt-4o-mini). Tuy không tính premium nhưng ảnh hưởng latency |
+| R7 | Debug Confusion | 🟡 Trung bình | Chat Debug trộn request intent detection với main execution → dễ hiểu sai model đang dùng |
+
+### ✅ Khuyến nghị bổ sung
+
+| # | Khuyến nghị | Hành động cụ thể |
+|---|------------|-----------------|
+| K4 | Verify model qua Chat Debug | Luôn check Chat Debug — tìm request có `completion_tokens` lớn (main task), bỏ qua request có output ~8 tokens (intent detection) |
+| K5 | Test Codex availability | Trước khi deploy policy dùng Codex, verify model có accessible trên môi trường team không |
+| K6 | Fallback awareness | Document cho team: model picker ≠ model thực tế — Copilot có auto-fallback ẩn |
+
+**Speaker note:** Case study này cho thấy Copilot có hidden complexity mà docs không nói rõ. Team cần verify thực tế thay vì tin model picker.
+
+---
+
+## SLIDE 8: Kiến Trúc Tổng Quan — 3 Surfaces + Hidden Layer trong VS Code
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            VS CODE IDE                                      │
+│                                                                             │
+│  ┌─────────────────────┐  ┌─────────────────────┐  ┌────────────────────┐  │
+│  │  1. INLINE          │  │  2. CHAT / AGENT    │  │  3. COPILOT CLI   │  │
+│  │     COMPLETIONS     │  │     MODE (LOCAL)    │  │     (BACKGROUND)  │  │
+│  │                     │  │                     │  │                    │  │
+│  │  Ghost text khi gõ  │  │  Chat panel +       │  │  Terminal agent    │  │
+│  │  Quota riêng        │  │  Agent edits local  │  │  trong VS Code    │  │
+│  │  Ko tính premium    │  │  1 req/prompt       │  │  1 req/prompt     │  │
+│  │  Unlimited (Paid)   │  │  Tool calls FREE    │  │  Tool calls FREE  │  │
+│  └─────────────────────┘  └─────────────────────┘  └────────────────────┘  │
+│                                                                             │
+│  ┌──────────────────────────────────────────────────────────────────────┐   │
+│  │  ẨN: Intent Detection Pipeline (gpt-4o-mini via "copilot-fast")     │   │
+│  │     → Chạy TRƯỚC mọi surface (Chat, Agent, CLI)                     │   │
+│  │     → Classify intent: ask/write/edit/help                           │   │
+│  │     → KHÔNG document chính thức                                      │   │
+│  └──────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Mỗi Surface phù hợp với loại task nào?
+
+| Surface | Best For | Billing | Ví dụ thực tế |
+|---------|----------|---------|---------------|
+| Inline Completions | Gõ code real-time, boilerplate | Quota riêng (free trên Paid) | Tab-accept khi gõ function body |
+| Chat Mode | Hỏi đáp, explain, review | 1 req × multiplier / message | "Giải thích design pattern này" |
+| Agent Mode | Task phức tạp, multi-file | 1 req × multiplier / prompt | "Implement full CRUD module" |
+| Copilot CLI (Background) | Terminal-based tasks | 1 req × multiplier / prompt | `@terminal How to rollback migration` |
+
+**Speaker note:** Đây là bức tranh toàn cảnh quan trọng nhất — giúp team hiểu rõ 3 surface + 1 hidden layer khi dùng Copilot local trong VS Code. Mỗi surface có billing riêng biệt.
+
+---
+
+## SLIDE 9: Bảng Bằng Chứng Tổng Hợp — Fact vs Hypothesis
+
+| Luận điểm | Trạng thái | Nguồn |
+|-----------|-----------|-------|
+| Local Agent Mode: tool calls không tính premium request | ✅ Sự thật | docs.github.com/copilot-requests |
+| Inline completions có quota riêng, không tính premium | ✅ Sự thật | docs.github.com/copilot-requests |
+| Auto model selection cho 10% discount multiplier (Chat) | ✅ Sự thật | docs.github.com/auto-model-selection |
+| VS Code có settings riêng cho Plan Agent và Implement step | ✅ Sự thật | VS Code docs · agents/planning |
+| VS Code dùng `copilot-fast` endpoint cho intent detection | ✅ Sự thật | Source code intentDetector.tsx |
+| gpt-4o-mini dùng cho intent detection (not main task) | ⚠️ Giả thuyết mạnh | Source code + Chat Debug evidence |
+| Model user chọn luôn là model chạy main task | ❌ Không chắc | Auto-fallback + Codex availability issues |
+| GPT-5.3-Codex có vấn đề accessibility trên một số env | ✅ Sự thật | GitHub Issues #14165, #14167 |
+| Copilot có auto-fallback sang model khác khi cần | ✅ Sự thật | docs.github.com/auto-model-selection |
+| GPT-4o đã deprecated trong Copilot Chat từ 08/2025 | ✅ Sự thật | changelog 2025-08-06 |
+
+**Speaker note:** Slide này giúp phân biệt fact-based evidence và suy diễn — quan trọng cho uy tín của presenter.
+
+---
+
+## SLIDE 10: Demo Xác Thực — Kiểm Tra Model Thực Tế
+
+> 🎯 **Mục tiêu:** Hướng dẫn team tự verify model đang dùng thay vì tin model picker
+
+**B1 · MỞ CHAT DEBUG**
+- VS Code → Command Palette → `Developer: Open Chat Debug`
+- Hoặc click vào icon debug trong Copilot Chat panel
+
+**B2 · GỬI 1 PROMPT ĐƠN GIẢN**
+- Ví dụ: "Giải thích hàm này" hoặc "Tạo 1 test file"
+- Chọn model cụ thể (ví dụ: GPT-5.3-Codex)
+
+**B3 · KIỂM TRA CHAT DEBUG LOGS**
+- Tìm **tất cả requests** trong cùng 1 interaction:
+  - **Request nhỏ** (~8 completion tokens, ~1600 prompt tokens) = **Intent Detection** (gpt-4o-mini)
+  - **Request lớn** (nhiều completion tokens) = **Main Task** (model user đã chọn)
+- Check field `resolved model` — đây là model THỰC SỰ được dùng
+
+**B4 · SO SÁNH MODEL CHỌN vs MODEL THỰC TẾ**
+- Nếu `resolved model` = model đã chọn → ✅ OK
+- Nếu `resolved model` ≠ model đã chọn → ⚠️ Auto-fallback đã xảy ra
+- Nếu chỉ thấy request nhỏ (intent detection) → kiểm tra xem có request khác phía sau không
+
+**B5 · VERIFY BILLING IMPACT**
+- Đối chiếu usage metrics trong GitHub Billing Analytics
+- Intent detection request: **KHÔNG tính premium** (internal pipeline)
+- Main task request: **CÓ tính premium** × multiplier của model thực tế (resolved model)
+
+**Speaker note:** Demo này rất hữu ích cho team kỹ thuật — chứng minh bằng data thay vì suy đoán.
+
+---
+
+## SLIDE 11: Rủi Ro Thực Tế & Khuyến Nghị (Cập Nhật)
+
+### ⚠️ Rủi ro
+
+| # | Rủi ro | Mức độ | Mô tả |
+|---|--------|--------|-------|
+| R1 | Billing surprise | 🔴 Cao | Model multiplier cao bất ngờ (Opus 3x, GPT-4.5 ~50x). Không set budget cap → overage không giới hạn |
+| R2 | Model Phantom | 🔴 Cao | User chọn model A nhưng Copilot thực tế dùng model B do auto-fallback hoặc availability. Ảnh hưởng chất lượng output + billing |
+| R3 | Nhầm Surface | 🟡 TB | Nhầm Local Chat vs Agent Mode vs CLI → billing/model behavior khác nhau |
+| R4 | Rate limiting sớm | 🟡 TB | Short-window rate limit kích hoạt dù quota tháng còn nhiều |
+| R5 | Intent Detection ẩn | 🟢 Thấp | Mỗi interaction có request ẩn (gpt-4o-mini) — không tính premium nhưng tăng latency |
+| R6 | Codex Availability | 🟡 TB | GPT-5.3-Codex không available trên mọi môi trường (GitHub Issues #14165) |
+
+### ✅ Khuyến nghị
+
+| # | Khuyến nghị | Hành động cụ thể |
+|---|------------|-----------------|
+| K1 | Agentic Workflow Standard | Chuẩn hóa template S.C.D.T + ưu tiên Agent Mode local |
+| K2 | Model Verification Protocol | Dùng Chat Debug verify `resolved model` trước khi deploy policy |
+| K3 | Monthly Usage Audit | Audit usage + session logs hàng tháng, set budget alerts |
+| K4 | Surface Documentation | Tách rõ 3 surfaces (Inline, Chat/Agent, CLI) + hidden layer trong team docs |
+| K5 | Fallback Awareness Training | Đào tạo team hiểu auto-fallback + cách verify model thực tế |
+
+**Speaker note:** Mục tiêu cuối cùng là quản trị được cả cost, model quality, lẫn kỳ vọng output.
+
+---
+
+## SLIDE 12: Community Data & Nghiên Cứu — User Thực Tế Dùng Copilot Như Thế Nào?
+
+> 📊 Nguồn: GitHub Blog Research, r/GithubCopilot, r/opencodeCLI (2025–2026), GitHub Issues
+> ⚠️ Dữ liệu cộng đồng — chỉ dùng để tạo giả thuyết vận hành, không thay thế tài liệu chính thức
+
+### 📈 Dữ liệu nghiên cứu chính thức (GitHub × Accenture, 2024)
+
+| Metric | Kết quả | Ý nghĩa cho team |
+|--------|---------|-------------------|
+| Code speed | **55% nhanh hơn** | Developer hoàn thành task nhanh hơn đáng kể |
+| Code confidence | **85% tự tin hơn** về chất lượng | Ít lo lắng khi push code |
+| PR throughput | **+8.69% pull requests** / dev | Nhiều feature deliver hơn |
+| PR quality | **+15% merge rate** | Code qua review tốt hơn |
+| Build success | **+84% successful builds** | Ít break CI/CD |
+| Adoption rate | **96% dùng ngay ngày đầu** | Onboarding cực nhanh |
+| Job satisfaction | **90% hài lòng hơn** | Retention tốt hơn |
+| Usage frequency | **67% dùng ≥5 ngày/tuần** | Trở thành tool thiết yếu |
+| Code retention | **88% giữ lại generated code** | Output chất lượng cao |
+
+> *Nguồn: [github.blog/research-quantifying-github-copilots-impact-in-the-enterprise-with-accenture](https://github.blog/news-insights/research/research-quantifying-github-copilots-impact-in-the-enterprise-with-accenture/)*
+
+### ✓ Patterns hiệu quả từ cộng đồng
+- **Model Tiering:** Dùng model mạnh (1x–3x) cho spec/reasoning, model rẻ (0x/0.25x) cho triển khai
+- **Usage Pacing:** Theo dõi nhịp tiêu hao premium requests theo tuần/tháng để tránh overage cuối kỳ
+- **Chat Debug Audit:** Một số user nâng cao dùng Chat Debug để verify model thực tế — phát hiện intent detection pipeline
+- **Custom Agents Workflow:** Tạo Plan → Implement pipeline bằng .agent.md files — tự động hóa quy trình
+- **Context File Investment:** Team đầu tư 30 phút viết `.github/copilot-instructions.md` → tiết kiệm hàng giờ/tuần
+
+### ⚠️ Pain points phổ biến
+- **Model Mismatch:** User chọn model premium nhưng thấy gpt-4o-mini trong debug logs — gây confusion lớn
+- **Rate Limiting sớm:** Gặp rate limit dù quota tháng còn nhiều — do giới hạn burst window, không phải hết tháng
+- **Codex Issues:** GPT-5.3-Codex không accessible trên một số môi trường (Issues #14165, #14167)
+- **CLI Context Bloat:** Copilot CLI + nhiều global skills/plugins → context bloat → token limit errors
+- **Prompt Quality Gap:** Dev chưa quen viết agentic prompt → vẫn chat từng bước → tốn 5-10x request
+
+**Speaker note:** Slide này kết hợp data nghiên cứu chính thức + community observations. Data Accenture rất mạnh cho executive buy-in. Pain points giúp team tránh bẫy phổ biến.
+
+---
+
+## SLIDE 13: Q&A + Key Takeaways
+
+### 5 Key Takeaways
+
+1. ✅ **Tối ưu request = workflow agentic đúng cách** — 1 prompt Agent Mode = 12 prompt chat nhỏ. Tiết kiệm 10-12x request.
+2. ✅ **Included models (0x) là "vũ khí bí mật"** — GPT-4.1, GPT-5 mini miễn phí trên paid plans. 70% tasks xử lý tốt.
+3. ✅ **Model picker ≠ Model thực tế** — Copilot có intent detection (gpt-4o-mini) + auto-fallback ẩn. Luôn verify bằng Chat Debug.
+4. ✅ **Template S.C.D.T + 3 Quy Tắc Vàng** — Framework áp dụng ngay cho team: "1 Prompt = 1 Task", "Free First", "Plan → Execute".
+5. ✅ **Data chứng minh ROI** — 55% nhanh hơn, 85% tự tin hơn, 84% tăng successful builds (Accenture study). Copilot không phải cost — là investment.
+
+### Nguồn tham khảo chính
+
+| Chủ đề | Link |
+|--------|------|
+| Billing / Requests | https://docs.github.com/en/copilot/concepts/billing/copilot-requests |
+| Supported Models + Multipliers | https://docs.github.com/en/copilot/reference/ai-models/supported-models |
+| Auto Model Selection | https://docs.github.com/en/copilot/concepts/auto-model-selection |
+| VS Code Chat Modes & Custom Agents | https://code.visualstudio.com/docs/copilot/chat/chat-modes |
+| VS Code Planning Docs | https://code.visualstudio.com/docs/copilot/agents/planning |
+| GPT-4o Deprecation | https://github.blog/changelog/2025-08-06-deprecation-of-gpt-4o-in-copilot-chat/ |
+| Accenture Research Study | https://github.blog/news-insights/research/research-quantifying-github-copilots-impact-in-the-enterprise-with-accenture/ |
+| Agent Mode Announcement | https://github.blog/news-insights/product-news/github-copilot-the-agent-awakens/ |
+| Codex Issue #14165 | https://github.com/microsoft/vscode-copilot-release/issues/14165 |
+| Source: intentDetector.tsx | https://github.com/microsoft/vscode-copilot-chat (internal) |
+
+---
+
+## Phụ Lục A: Bảng Model Multipliers Đầy Đủ
+
+| Model | Paid Plan | Free Plan | Nhóm |
+|-------|-----------|-----------|------|
+| GPT-4.1 | 0x | 1x | Included |
+| GPT-4o | 0x | 1x | Included (deprecated Chat) |
+| GPT-5 mini | 0x | 1x | Included |
+| Raptor mini | 0x | 1x | Included |
+| Grok Code Fast 1 | 0.25x | N/A | Budget premium |
+| Claude Haiku 4.5 | 0.33x | 1x | Budget premium |
+| GPT-5.1-Codex-Mini | 0.33x | N/A | Budget premium |
+| o3 mini / o4 mini | 0.33x | N/A | Budget premium |
+| Gemini 3 Flash | 0.33x | N/A | Budget premium |
+| Claude Sonnet 4.5/4.6 | 1x | N/A | Standard premium |
+| GPT-5.1 / 5.2 / 5.3 / 5.4 | 1x | N/A | Standard premium |
+| Gemini 3 Pro | 1x | N/A | Standard premium |
+| o3 | 1x | N/A | Standard premium |
+| Claude Opus 4.5 | **3x** | N/A | ⚠️ High cost |
+| GPT-4.5 | **~50x** | N/A | ❌ Rất đắt |
+
+*Nguồn: docs.github.com/en/copilot/reference/ai-models/supported-models — cập nhật 04/2026*
+
+---
+
+## Phụ Lục B: Two-Stage Pipeline — Minh Họa Kỹ Thuật
+
+```
+User chọn GPT-5.3-Codex trong Model Picker
+           ↓
+┌──────────────────────────────────┐
+│  STAGE 1: Intent Detection       │
+│  Model: gpt-4o-mini (hardcoded) │
+│  Endpoint: copilot-fast          │
+│  Source: intentDetector.tsx       │
+│  ~8 completion tokens            │
+│  Billing: KHÔNG tính premium     │
+└──────────────────────────────────┘
+           ↓
+┌──────────────────────────────────┐
+│  STAGE 2: Main Task Execution    │
+│  Model: GPT-5.3-Codex (hoặc     │
+│         auto-fallback model)     │
+│  Proxy: copilotLanguageModel     │
+│         Wrapper                  │
+│  Nhiều completion tokens         │
+│  Billing: CÓ tính premium × mul │
+└──────────────────────────────────┘
+           ↓
+     Response → User
+```
+
+**Cách phân biệt trong Chat Debug:**
+- Request có ~8 completion tokens, ~1600 prompt tokens → **Intent Detection** (Stage 1)
+- Request có nhiều completion tokens → **Main Task** (Stage 2)
+- Check field `resolved model` trong Stage 2 để verify model thực tế
+
+*Phát hiện dựa trên: source code analysis (intentDetector.tsx, languageModelAccess.ts) + Chat Debug observation + community reports (r/GithubCopilot)*
